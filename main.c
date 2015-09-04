@@ -11,10 +11,12 @@
 #define MAX_MAGNITUDE 4u // Maximum input size supported
 #define MAX_PRECISION (MAX_DIGITS - MAX_MAGNITUDE)
 
+    // These are codes for special key combinations.
 #define TERMINATION_KEY     0x0
 #define TERMINATION_KEY2    0x1
 #define CONTINUE_KEY        0x2
 
+    // These defines represent operation codes
 #define ADD_GLYPH           '+'
 #define SUB_GLYPH           '-'
 #define MUL_GLYPH           '*'
@@ -222,6 +224,18 @@ void set_initial_state(void){
     bankA->OUT.reg |= 0x000000F0;
     bankB->OUT.reg |= 0x000000FF;
     bankB->OUT.reg |= 0x200;
+
+    // Initialize packet information
+        // Decrementing migt be faster like in other ARM architectures?
+    UINT8 counter = 0x8;
+    for(; counter > 0x0; --counter)
+        ci_pack.exp.operand[counter-0x1] = 0x0;
+    ci_pack.key_code = TERMINATION_KEY;
+    ci_pack.exp.index = ci_pack.exp.op_code = 0u;
+    ci_pack.magnitude = 0u;
+    ci_pack.num_to_display = 0u;
+    ci_pack.state = ent_num_state;
+    ci_pack.cleared_already = FALSE__;
 }
 
 void shutdown(void){
@@ -385,12 +399,16 @@ UINT8 wait_for_key(UINT32 add_delay, UINT8* row_dest, UINT8* col_dest){
 	    // Provide power to one specific row
 	    bankA->OUT.reg |= 0x000000F0;
 	    bankA->OUT.reg &= ~(row_bit << 4u);
-            // Quickly display the current digit
-///        diaplay_dig_of(ci_pack.exp.operand[ci_pack.num_to_display], row);
         delay_ms(5);
             // Extract the four bits we're interested in from
             //   the keypad.
         *col_dest = (bankA->IN.reg >> 16u) & 0xF;
+            // Quickly display the current digit while assigning value
+            //  to *row_dest. Inline the expression so that row_dest
+            //  is dereferenced once instead of twice. This is important since
+            //  row_dest is dereferenced each iteration.
+        diaplay_dig(ci_pack.exp.operand[*row_dest = find_lsob(row_bit)], row);
+            // Check if a button was pressed
         switch(*col_dest){
             case 0xB: return TERMINATION_KEY;   // Terminate the program 
             case 0xD: return TERMINATION_KEY2;  // Terminate the test program
@@ -400,7 +418,7 @@ UINT8 wait_for_key(UINT32 add_delay, UINT8* row_dest, UINT8* col_dest){
                 LOG("Input is: ");
                 LOGNUMRETURN(bankA->IN.reg);
                 LOG("Pressed key #");
-                *row_dest = find_lsob(row_bit);
+                // Already assigned appropriate value to row_dest
                 *col_dest = find_lsob(*col_dest);
                     LOGNUM((*row_dest-1) * 4u + *col_dest - 1u);
                     LOG("\t(Column: ");
