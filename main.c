@@ -75,9 +75,11 @@
 #define FALSE__       0
 
 typedef struct {
-        // Store both operands as four digit
-        //  numbers in an array
-    UINT8 operand[8];
+        // Store both operands as four digit numbers in an array. The operands
+        //  will follow big endian format, i.e. the most significant digits
+        //  will sit at the front of the array. Store individual digits to ease
+        //  displaying.
+    UINT8 operand[MAX_DIGITS*0x2];
     UINT8 index;
     UINT8 op_code;
 } expression_data;
@@ -107,8 +109,13 @@ void run_calculator(void);
     //  other settings such as pull-up/down resistors.
 void configure_ports(void);
 
-    // Compute an expression based on its data
-float compute(void);
+    // Compute an expression based on its data and operation code.
+    // Because an entire number cannot simply be display in one call,
+    //  use comptue to store the resulting value as the first operand
+    //  in the information packet. This might also allow extension into
+    //  chained expressions.
+    // Return whether or not an overload has occurred.    
+BOOLEAN__ compute(void);
 
     // Store digit attempts to push digit to lsd of current number
     //  being used based on available space and the current state
@@ -142,7 +149,8 @@ UINT8 wait_for_key(UINT32 delay_ms, UINT8* row_dest, UINT8* col_dest);
         /**********    End IO functions    **********/
 
     // Initial state is defined as all seven segment displays turned off.
-    //   owever, power is still present.
+    //  However, power is still present. All data in the global information
+    //  packet is reset to predefined values.
 void set_initial_state(void);
     // Shutdown state is defined similarly to set_initial_state with the
     //  exception that power is switched off.
@@ -219,38 +227,35 @@ void configure_ports(void){
     bankB->OUT.reg &= ~0x10;
 }
 
-void set_initial_state(void){
-        // Active low logic
-    bankA->OUT.reg |= 0x000000F0;
-    bankB->OUT.reg |= 0x000000FF;
-    bankB->OUT.reg |= 0x200;
-
-    // Initialize packet information
-        // Decrementing migt be faster like in other ARM architectures?
-    UINT8 counter = 0x8;
-    for(; counter > 0x0; --counter)
-        ci_pack.exp.operand[counter-0x1] = 0x0;
-    ci_pack.key_code = TERMINATION_KEY;
-    ci_pack.exp.index = ci_pack.exp.op_code = 0u;
-    ci_pack.magnitude = 0u;
-    ci_pack.num_to_display = 0u;
-    ci_pack.state = ent_num_state;
-    ci_pack.cleared_already = FALSE__;
-}
-
-void shutdown(void){
-    set_initial_state();
-    // Blink three times to indicate shutdown
-    bankA->DIR.reg |= (1<14u);
-    UINT8 counter = 0x0;
-    for(; counter < 3; ++counter){
-        bankA->OUT.reg |= (1<<14u);
-        bankB->OUT.reg &= ~0x200;
-        delay_ms(500);
-        bankA->OUT.reg &= ~(1<<14u);
-        bankB->OUT.reg |= 0x200;
-        delay_ms(500);
+BOOLEAN__ compute(){
+        // Retrieve the actual operands
+    UINT32 op1=0x0, op2=0x0;
+    UINT8 counter = MAX_DIGITS;
+    UINT32 factor = 1;
+    for(; counter > 0x0; ++counter, factor *= 10){
+        op1 += ci_pack.exp.operand[counter-0x1] * factor;
+        op2 += ci_pack.exp.operand[counter+0x3] * factor;
     }
+
+    switch(ci_pack.exp.op_code){
+        case ADD_GLYPH: op1 += op2; break;
+        case SUB_GLYPH: op1 -= op2; break;
+        case MUL_GLYPH: op1 *= op2; break;
+        case DIV_GLYPH: op1 /= op2; break;
+        default:
+            LOGRETURN("Invalid operation code.");
+            return;
+    }
+    op2 = op1;
+        // Reset some values and store the result in operand 1's slot
+    for(counter = MAX_DIGITS; counter > 0x0; --counter, op1 /= 10){
+        ci_pack.exp.operand[counter] = op1 % 0xA;
+        ci_pack.exp.operand[counter+0x3] = 0x0;
+    }
+    ci_pack.exp.operand[1u] = -1.0f;
+    ci_pack.exp.index = ci_pack.exp.op_code = 0u;
+
+    return op2 >= factor*0xA;
 }
 
 UINT32 find_lsob(UINT32 target){
@@ -430,10 +435,48 @@ UINT8 wait_for_key(UINT32 add_delay, UINT8* row_dest, UINT8* col_dest){
                     return CONTINUE_KEY;
         }
 
-            // Prepare for the next row. If we were on the fourth
+            // Prepare for the next row. If we were on the last
             //  row, cycle back to the first row.
         row_bit <<= 1;
+            // Take modulous to retrieve current value of row_bit when
+            //  we were not on the last row. If that is the case,
+            //  reset row_bit to 1.
         row_bit = (row_bit%(1u<<4)) | (row_bit==(1u<<4));
     }
 }
+
+void set_initial_state(void){
+        // Active low logic
+    bankA->OUT.reg |= 0x000000F0;
+    bankB->OUT.reg |= 0x000000FF;
+    bankB->OUT.reg |= 0x200;
+
+    // Initialize packet information
+        // Decrementing migt be faster like in other ARM architectures?
+    UINT8 counter = 0x8;
+    for(; counter > 0x0; --counter)
+        ci_pack.exp.operand[counter-0x1] = 0x0;
+    ci_pack.key_code = TERMINATION_KEY;
+    ci_pack.exp.index = ci_pack.exp.op_code = 0u;
+    ci_pack.magnitude = 0u;
+    ci_pack.num_to_display = 0u;
+    ci_pack.state = ent_num_state;
+    ci_pack.cleared_already = FALSE__;
+}
+
+void shutdown(void){
+    set_initial_state();
+    // Blink three times to indicate shutdown
+    bankA->DIR.reg |= (1<14u);
+    UINT8 counter = 0x0;
+    for(; counter < 3; ++counter){
+        bankA->OUT.reg |= (1<<14u);
+        bankB->OUT.reg &= ~0x200;
+        delay_ms(500);
+        bankA->OUT.reg &= ~(1<<14u);
+        bankB->OUT.reg |= 0x200;
+        delay_ms(500);
+    }
+}
+
     /**********   End function definitions      **********/
