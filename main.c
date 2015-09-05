@@ -133,7 +133,7 @@ BOOLEAN__ store_op(UINT8 new_op);
     //        - Multiplication    --> MUL_GLYPH
     //        - Division          --> DIV_GLYPH
     //    For Enter and Clear inputs, the code is 0.
-input_type decode_input_type(UINT8, UINT8*);
+input_type decode_input_type(UINT8* i_code, UINT8 row, UINT8 col);
 
         /**********   Start IO functions   **********/
     // Display number to the seven segment displays
@@ -256,6 +256,51 @@ BOOLEAN__ compute(){
     ci_pack.exp.index = ci_pack.exp.op_code = 0u;
 
     return op2 >= factor*0xA;
+}
+
+input_type decode_input_type(UINT8* i_code, UINT8 row, UINT8 col){
+    if (IS_NULL(i_code)){
+        return no_input;
+    }
+
+    // Active high operation
+
+    switch (row*4u+col){
+    // Operations
+        case 0x0:
+            LOGRETURN("Pressed division key");
+            *i_code = DIV_GLYPH;
+            return op_input;
+        case 0x4:
+            LOGRETURN("Pressed multiplication key");
+            *i_code = MUL_GLYPH;
+            return op_input;
+        case 0x3:
+            LOGRETURN("Pressed subtraction key");
+            *i_code = SUB_GLYPH;
+            return op_input;
+        case 0x1:
+            LOGRETURN("Pressed addition key");
+            *i_code = ADD_GLYPH;
+            return op_input;
+    // Enter and clear
+        case 0xC:
+            *i_code = 0;
+            return ent_input;
+        case 0x8:
+            *i_code = 0;
+            return clr_input;
+    // Digits
+        case 0x2:
+            *i_code = 0;
+            LOGRETURN("Entered number: 0");
+            return dig_input;
+        default:
+           *i_code = (0x3 - row) * 0x3 + (0x4 - col);
+            LOG("Entered number: ");
+            LOGNUMRETURN(*i_code);
+            return dig_input;
+    }
 }
 
 UINT32 find_lsob(UINT32 target){

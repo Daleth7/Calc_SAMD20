@@ -1,12 +1,13 @@
 Branch:
     DT:
-        * Test wait_for_key() with display_dig()
+        * Test:
+            1) wait_for_key() with display_dig()
+            2) decode_input_type()
         * Ensure comptue does what it's supposed to do
         * Import and test:
-            1) decode_input_type()
-            2) store_op()
-            3) store_dig()
-            4) run_calculator()
+            1) store_op()
+            2) store_dig()
+            3) run_calculator()
         * Clean up clutter and spaghetti code
     Correia:
         * Implement and test software debouncing
