@@ -122,7 +122,7 @@ BOOLEAN__ compute(void);
     //  of the calculator.
     //  This function returns whether or not the storing of the
     //  digit was successful.
-BOOLEAN__ store_dig(UINT8 new_dig, UINT8* ntd_ptr);
+BOOLEAN__ store_dig(UINT8 new_dig);
 BOOLEAN__ store_op(UINT8 new_op);
 
     // Determine type of input and its associated code number.
@@ -256,6 +256,78 @@ BOOLEAN__ compute(){
     ci_pack.exp.index = ci_pack.exp.op_code = 0u;
 
     return op2 >= factor*0xA;
+}
+
+BOOLEAN__ store_dig(UINT8 new_dig){
+    switch(ci_pack.state){
+        case ent_fin_state:
+            // Calculation was finished, so reset all values
+            //  and store new digit. Also go to the entering
+            //  number state.
+            ci_pack.magnitude = 0u;
+            {
+                UINT8 counter = 0u;
+                for(; counter < MAX_DIGITS; ++counter)
+                    ci_pack.exp.operand[counter] = 0x0;
+            }
+            ci_pack.state = ent_num_state;
+            ci_pack.num_to_display = 0u;
+            ci_pack.exp.index = 0u;
+        case ent_num_state:
+            // Program is ready to accept a new digit.
+            if (ci_pack.magnitude == MAX_MAGNITUDE){
+                // There were already MAX_MAGNITUDE digits stored
+                return FALSE__;
+            }
+            if (!(ci_pack.magnitude || new_dig)){
+                ci_pack.exp.operand[ci_pack.exp.index] = 0.0f;
+                return TRUE__;
+            }
+                // Push digits left if necessary then insert new digit
+            ci_pack.exp.operand[ci_pack.exp.index] *= (ci_pack.magnitude > 0u)*10.0f;
+            ci_pack.exp.operand[ci_pack.exp.index] += new_dig;
+                // Update magnitude. If magnitude is at max, update
+                //  index as well.
+            ++(ci_pack.magnitude);
+            if (ci_pack.exp.index)    ci_pack.num_to_display = ci_pack.exp.index;
+            if(ci_pack.magnitude == MAX_MAGNITUDE){
+                ci_pack.magnitude = 0u;
+                if(ci_pack.exp.index){
+                    ++ci_pack.exp.index;
+                }
+                ci_pack.state = ent_op_state;
+            }
+            return TRUE__;
+        case ent_op_state:
+            // Program was expecting an operator.
+            //  Guarantee that expression is not affected.
+            return FALSE__;
+        default:    // Should never happen
+            LOGRETURN("Invalid state");
+            return FALSE__;
+    }
+}
+
+BOOLEAN__ store_op(UINT8 new_op){
+    switch (ci_pack.state){
+        case ent_op_state:
+            ci_pack.exp.op_code = new_op;
+            ci_pack.state = ent_num_state;
+            return TRUE__;
+        case ent_num_state:
+            if (ci_pack.exp.index || !ci_pack.magnitude){
+                // Either the current operand has no digits
+                //  or the program is already on the second
+                //  operand.
+                return FALSE__;
+            }
+            ci_pack.exp.op_code = new_op;
+            ci_pack.exp.index = 1u;
+            ci_pack.magnitude = 0u;
+            return TRUE__;
+        default:
+            return FALSE__;
+    }
 }
 
 input_type decode_input_type(UINT8* i_code, UINT8 row, UINT8 col){
