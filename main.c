@@ -2,6 +2,7 @@
 
     /**********   Start Macro switches   **********/
 #define RUN_CHECK
+#define RUN_SOFT_CHECK
 #define NLOG
     /**********   End Macro switches    **********/
 
@@ -55,6 +56,7 @@
     /**********   Start type aliasing   **********/
 #include <stdint.h>
 
+#define INT32   int32_t
 #define UINT32  uint32_t
 #define UINT8   uint8_t
 
@@ -79,9 +81,11 @@ typedef struct {
         //  will follow big endian format, i.e. the most significant digits
         //  will sit at the front of the array. Store individual digits to ease
         //  displaying.
-    UINT8 operand[MAX_DIGITS*0x2];
-    UINT8 index;
-    UINT8 op_code;
+    UINT8       operand[MAX_DIGITS*0x2];
+    UINT8       index;
+    UINT8       op_code;
+        // bit0 ~ operand 1 | bit 1 ~ operand 2
+    UINT8       is_neg;
 } expression_data;
 
 struct calculator_information_packet{
@@ -97,10 +101,16 @@ struct calculator_information_packet{
     /**********   End type aliasing     **********/
 
     /**********   Start function prototypes   **********/
+    // Find last significant ON bit
 UINT32 find_lsob(UINT32);
 
-    // Debugging program
-void test_hardware(void);
+    // Debugging programs
+#ifdef RUN_CHECK
+    void test_hardware(void);
+#endif
+#ifdef RUN_SOFT_CHECK
+    void test_software(void);
+#endif
 
     // Main program
 void run_calculator(void);
@@ -152,6 +162,8 @@ UINT8 wait_for_key(UINT32 delay_ms, UINT8* row_dest, UINT8* col_dest);
     //  However, power is still present. All data in the global information
     //  packet is reset to predefined values.
 void set_initial_state(void);
+    // Ensure the structure values are set to default values.
+void reset_info_pack(void);
     // Shutdown state is defined similarly to set_initial_state with the
     //  exception that power is switched off.
 void shutdown(void);
@@ -229,13 +241,15 @@ void configure_ports(void){
 
 BOOLEAN__ compute(){
         // Retrieve the actual operands
-    UINT32 op1=0x0, op2=0x0;
+    INT32 op1=0x0, op2=0x0;
     UINT8 counter = MAX_DIGITS;
-    UINT32 factor = 1;
+    INT32 factor = 1;
     for(; counter > 0x0; ++counter, factor *= 10){
         op1 += ci_pack.exp.operand[counter-0x1] * factor;
-        op2 += ci_pack.exp.operand[counter+0x3] * factor;
+        op2 += ci_pack.exp.operand[counter+MAX_DIGITS-0x1] * factor;
     }
+    op1 *= -1*(ci_pack.exp.is_neg & 0x1);
+    op2 *= -1*(ci_pack.exp.is_neg & 0x2);
 
     switch(ci_pack.exp.op_code){
         case ADD_GLYPH: op1 += op2; break;
@@ -246,14 +260,20 @@ BOOLEAN__ compute(){
             LOGRETURN("Invalid operation code.");
             return;
     }
-    op2 = op1;
+
+    if(op1 < 0){
+        ci_pack.exp.is_neg |= 0x1;
+        op2 = (op1 *= -1);
+    } else {
+        op2 = op1;
+    }
         // Reset some values and store the result in operand 1's slot
     for(counter = MAX_DIGITS; counter > 0x0; --counter, op1 /= 10){
         ci_pack.exp.operand[counter] = op1 % 0xA;
-        ci_pack.exp.operand[counter+0x3] = 0x0;
+        ci_pack.exp.operand[counter+MAX_DIGITS-0x1] = 0x0;
     }
-    ci_pack.exp.operand[1u] = -1.0f;
     ci_pack.exp.index = ci_pack.exp.op_code = 0u;
+    ci_pack.exp.is_neg &= ~(0x2);
 
     return op2 >= factor*0xA;
 }
@@ -264,15 +284,7 @@ BOOLEAN__ store_dig(UINT8 new_dig){
             // Calculation was finished, so reset all values
             //  and store new digit. Also go to the entering
             //  number state.
-            ci_pack.magnitude = 0u;
-            {
-                UINT8 counter = 0u;
-                for(; counter < MAX_DIGITS; ++counter)
-                    ci_pack.exp.operand[counter] = 0x0;
-            }
-            ci_pack.state = ent_num_state;
-            ci_pack.num_to_display = 0u;
-            ci_pack.exp.index = 0u;
+            reset_info_pack();
         case ent_num_state:
             // Program is ready to accept a new digit.
             if (ci_pack.magnitude == MAX_MAGNITUDE){
@@ -280,21 +292,17 @@ BOOLEAN__ store_dig(UINT8 new_dig){
                 return FALSE__;
             }
             if (!(ci_pack.magnitude || new_dig)){
-                ci_pack.exp.operand[ci_pack.exp.index] = 0.0f;
+                    // 0 condition
                 return TRUE__;
             }
-                // Push digits left if necessary then insert new digit
-            ci_pack.exp.operand[ci_pack.exp.index] *= (ci_pack.magnitude > 0u)*10.0f;
-            ci_pack.exp.operand[ci_pack.exp.index] += new_dig;
-                // Update magnitude. If magnitude is at max, update
-                //  index as well.
-            ++(ci_pack.magnitude);
-            if (ci_pack.exp.index)    ci_pack.num_to_display = ci_pack.exp.index;
+            ci_pack.exp.operand[ci_pack.exp.index] = new_dig;
+                // Update magnitude and index.
+            ++ci_pack.magnitude;
+            ++ci_pack.index;
+            if (ci_pack.exp.index > MAX_DIGITS)
+                ci_pack.num_to_display = 0x1;
             if(ci_pack.magnitude == MAX_MAGNITUDE){
                 ci_pack.magnitude = 0u;
-                if(ci_pack.exp.index){
-                    ++ci_pack.exp.index;
-                }
                 ci_pack.state = ent_op_state;
             }
             return TRUE__;
@@ -315,14 +323,14 @@ BOOLEAN__ store_op(UINT8 new_op){
             ci_pack.state = ent_num_state;
             return TRUE__;
         case ent_num_state:
-            if (ci_pack.exp.index || !ci_pack.magnitude){
+            if (ci_pack.exp.index < MAX_DIGITS || !ci_pack.magnitude){
                 // Either the current operand has no digits
                 //  or the program is already on the second
                 //  operand.
                 return FALSE__;
             }
             ci_pack.exp.op_code = new_op;
-            ci_pack.exp.index = 1u;
+            ci_pack.exp.index = MAX_DIGITS+0x1;
             ci_pack.magnitude = 0u;
             return TRUE__;
         default:
@@ -384,6 +392,7 @@ UINT32 find_lsob(UINT32 target){
     return toreturn;
 }
 
+#ifdef RUN_CHECK
 void test_hardware(void){
     // Run visual check on seven segment displays
     LOGRETURN("Running visual check...");
@@ -446,6 +455,56 @@ void test_hardware(void){
 #endif
     }
 }
+#endif
+
+#ifdef RUN_SOFT_CHECK
+void test_software(void){
+        // compute
+    set_initial_state();
+    UINT8 ounter = 0x0;
+    for(; ounter < MAX_DIGITS; ++ounter){
+        ci_pack.exp.operand[ounter] = ounter+0x1;
+        ci_pack.exp.operand[ounter+MAX_DIGITS] = ounter+MAX_DIGITS+0x1;
+    }
+    ci_pack.exp.op_code = SUB_GLYPH;
+    compute();
+
+        // store_op
+    set_initial_state();
+    ci_pack.state = ent_op_state;
+    BOOLEAN__ success = store_op(MUL_GLYPH);
+
+    set_initial_state();
+    ci_pack.state = ent_num_state;
+    success = store_op(MUL_GLYPH);  // Should fail
+
+        // store_dig
+    set_inital_state();
+    ci_pack.state = ent_fin_state;
+    success = store_dig(0x8);
+    success = store_dig(0x4);
+    success = store_dig(0x2);
+    success = store_dig(0x1);
+    success = store_dig(0x0);   // Should fail
+    success = store_op(ADD_GLYPH);
+    success = store_dig(0x1);
+    success = store_dig(0x0);
+    success = store_dig(0x2);
+    success = store_dig(0x3);
+
+        // decode_input_type
+    UINT8 r = 0x0, c = 0x0;
+    input_type in = no_input;
+    UINT8 dummy = 0x0;
+    for(; r < 0x4; ++r){
+        for(; c < 0x4; ++c){
+            in = decode_input_type(&dummy, r, c);
+        }
+    }
+
+    set_initial_state();
+}
+#endif
 
 void display_dig(UINT8 num, UINT8 select){
         // Active low logic
@@ -514,6 +573,10 @@ UINT8 wait_for_key(UINT32 add_delay, UINT8* row_dest, UINT8* col_dest){
 
     static UINT8 row_bit = 1u;
     *row_dest = 0u;
+        // Turn on negative sign if needed
+    bankB->OUT.reg |= 0x00000200;
+    bankB->OUT.reg &=
+        ~((UINT32)((ci_pack.exp.is_neg >> ci_pack.num_to_display) & 0x1) << 9u);
         // Polling method
     for(;;){
 	    // Active low logic
@@ -568,15 +631,18 @@ void set_initial_state(void){
     bankB->OUT.reg |= 0x000000FF;
     bankB->OUT.reg |= 0x200;
 
+    reset_info_pack();
+}
+
+void reset_info_pack(void){
     // Initialize packet information
         // Decrementing migt be faster like in other ARM architectures?
-    UINT8 counter = 0x8;
+    UINT8 counter = MAX_DIGITS*0x2;
     for(; counter > 0x0; --counter)
         ci_pack.exp.operand[counter-0x1] = 0x0;
     ci_pack.key_code = TERMINATION_KEY;
-    ci_pack.exp.index = ci_pack.exp.op_code = 0u;
-    ci_pack.magnitude = 0u;
-    ci_pack.num_to_display = 0u;
+    ci_pack.exp.index = ci_pack.exp.op_code = ci_pack.exp.is_neg = 0u;
+    ci_pack.magnitude = ci_pack.num_to_display = 0u;
     ci_pack.state = ent_num_state;
     ci_pack.cleared_already = FALSE__;
 }

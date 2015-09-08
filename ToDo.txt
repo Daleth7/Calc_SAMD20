@@ -9,6 +9,8 @@ Branch:
         * Import and test:
             1) run_calculator()
         * Clean up clutter and spaghetti code
+        * Possibly replace all increment-based loops
+            with decrement-based loops
     Correia:
         * Implement and test software debouncing
         * Clean up clutter and spaghetti code
