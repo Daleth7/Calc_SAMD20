@@ -2,8 +2,7 @@
 
     /**********   Start Macro switches   **********/
 #define RUN_CHECK
-#define RUN_SOFT_CHECK
-#define NLOG
+//#define RUN_SOFT_CHECK
     /**********   End Macro switches    **********/
 
     /**********   Start Macro defines   **********/
@@ -22,31 +21,6 @@
 #define SUB_GLYPH           '-'
 #define MUL_GLYPH           '*'
 #define DIV_GLYPH           '/'
-
-    // Choose whether or not to log progress
-#ifndef NLOG
-    #include <stdio.h>
-
-    #define LOG(STR) printf(STR)
-    #define LOGNUM(NUM) printf("0x%x",(unsigned)NUM)
-    #define LOGCHAR(CH) printf("%c",CH)
-    #define LOGFLOAT(FNUM) printf("%f", (float)FNUM)
-
-    #define LOGNUMRETURN(NUM) LOGNUM(NUM); LOG("\n")
-    #define LOGCHARRETURN(CH) LOGCHAR(CH); LOG("\n")
-    #define LOGRETURN(STR) LOG(STR); LOG("\n")
-    #define LOGFLOATRETURN(FNUM) LOGFLOAT(FNUM); LOG("\n")
-#else
-    #define LOG(STR)
-    #define LOGRETURN(STR)
-    #define LOGNUM(STR)
-    #define LOGNUMRETURN(STR)
-    #define LOGCHAR(STR)
-    #define LOGCHARRETURN(STR)
-    #define LOGFLOAT(FNUM)
-    #define LOGFLOATRETURN(FNUM)
-#endif
-
 
     // Short macro functions for inlining common expressions
 #define EMBED32(A1, A2, B1, B2) ( A1 | (A2<<4) | (B1<<8) | (B2<<12))
@@ -147,7 +121,7 @@ input_type decode_input_type(UINT8* i_code, UINT8 row, UINT8 col);
 
         /**********   Start IO functions   **********/
     // Display number to the seven segment displays
-void display_dig(UINT8 dig_to_display, UINT8 select);
+void display_dig(UINT32 add_delay, UINT8 dig_to_display, UINT8 select);
 
     // Wait for keypad input and return the key that was pressed.
     //  0 - 15 denotes key on keypad from bottom to top then left to right
@@ -186,6 +160,10 @@ int main(void){
 
     set_initial_state();
 
+#ifdef RUN_SOFT_CHECK
+    test_software();
+#endif
+
 #ifdef RUN_CHECK
     test_hardware();
 #endif
@@ -193,9 +171,6 @@ int main(void){
 //    run_calculator();
 
     shutdown();
-
-    delay_ms(100);
-    LOGRETURN("Program Terminated.");
 
     return 0;
 }
@@ -215,21 +190,16 @@ void configure_ports(void){
             // Controls sign indicator. 0010 0000 0000
         |  0x00000200
         ;
-    /* Set high drive strength ?
+    // Set high drive strength ?
     unsigned short i = 0;
     for(; i < 8; ++i){
-            // Enable input (bit 1).
-            //  Note that the pins are externally pulled low,
-            //  so there is no need to internally pull the pin logic.
         bankA->PINCFG[i].reg |= (1<<6);
     }
-    */
 
         // For reading input from keypad. 1111 0000 0000 0000 0000 
         //  Active high logic for input.
     bankA->DIR.reg &= ~0x000F0000;
-    unsigned short i = 16;
-    for(; i < 20; ++i){
+    for(i = 16; i < 20; ++i){
             // Enable input (bit 1).
             //  Note that the pins are externally pulled low,
             //  so disable pull up.
@@ -244,21 +214,19 @@ BOOLEAN__ compute(){
     INT32 op1=0x0, op2=0x0;
     UINT8 counter = MAX_DIGITS;
     INT32 factor = 1;
-    for(; counter > 0x0; ++counter, factor *= 10){
+    for(; counter > 0x0; --counter, factor *= 10){
         op1 += ci_pack.exp.operand[counter-0x1] * factor;
         op2 += ci_pack.exp.operand[counter+MAX_DIGITS-0x1] * factor;
     }
-    op1 *= -1*(ci_pack.exp.is_neg & 0x1);
-    op2 *= -1*(ci_pack.exp.is_neg & 0x2);
+    op1 *= (INT32)(ci_pack.exp.is_neg & 0x1)*(-2) + 1;
+    op2 *= (INT32)(ci_pack.exp.is_neg & 0x2)*(-2) + 1;
 
     switch(ci_pack.exp.op_code){
         case ADD_GLYPH: op1 += op2; break;
         case SUB_GLYPH: op1 -= op2; break;
         case MUL_GLYPH: op1 *= op2; break;
         case DIV_GLYPH: op1 /= op2; break;
-        default:
-            LOGRETURN("Invalid operation code.");
-            return;
+        default:        return false;
     }
 
     if(op1 < 0){
@@ -269,7 +237,7 @@ BOOLEAN__ compute(){
     }
         // Reset some values and store the result in operand 1's slot
     for(counter = MAX_DIGITS; counter > 0x0; --counter, op1 /= 10){
-        ci_pack.exp.operand[counter] = op1 % 0xA;
+        ci_pack.exp.operand[counter-0x1] = op1 % 0xA;
         ci_pack.exp.operand[counter+MAX_DIGITS-0x1] = 0x0;
     }
     ci_pack.exp.index = ci_pack.exp.op_code = 0u;
@@ -298,7 +266,7 @@ BOOLEAN__ store_dig(UINT8 new_dig){
             ci_pack.exp.operand[ci_pack.exp.index] = new_dig;
                 // Update magnitude and index.
             ++ci_pack.magnitude;
-            ++ci_pack.index;
+            ++ci_pack.exp.index;
             if (ci_pack.exp.index > MAX_DIGITS)
                 ci_pack.num_to_display = 0x1;
             if(ci_pack.magnitude == MAX_MAGNITUDE){
@@ -311,7 +279,6 @@ BOOLEAN__ store_dig(UINT8 new_dig){
             //  Guarantee that expression is not affected.
             return FALSE__;
         default:    // Should never happen
-            LOGRETURN("Invalid state");
             return FALSE__;
     }
 }
@@ -348,19 +315,15 @@ input_type decode_input_type(UINT8* i_code, UINT8 row, UINT8 col){
     switch (row*4u+col){
     // Operations
         case 0x0:
-            LOGRETURN("Pressed division key");
             *i_code = DIV_GLYPH;
             return op_input;
         case 0x4:
-            LOGRETURN("Pressed multiplication key");
             *i_code = MUL_GLYPH;
             return op_input;
         case 0x3:
-            LOGRETURN("Pressed subtraction key");
             *i_code = SUB_GLYPH;
             return op_input;
         case 0x1:
-            LOGRETURN("Pressed addition key");
             *i_code = ADD_GLYPH;
             return op_input;
     // Enter and clear
@@ -373,12 +336,9 @@ input_type decode_input_type(UINT8* i_code, UINT8 row, UINT8 col){
     // Digits
         case 0x2:
             *i_code = 0;
-            LOGRETURN("Entered number: 0");
             return dig_input;
         default:
            *i_code = (0x3 - row) * 0x3 + (0x4 - col);
-            LOG("Entered number: ");
-            LOGNUMRETURN(*i_code);
             return dig_input;
     }
 }
@@ -395,64 +355,30 @@ UINT32 find_lsob(UINT32 target){
 #ifdef RUN_CHECK
 void test_hardware(void){
     // Run visual check on seven segment displays
-    LOGRETURN("Running visual check...");
     // Turn on all LEDs
     bankA->OUT.reg &= ~0xF0;
     bankB->OUT.reg &= ~0xFF;
-    delay_ms(2000);
+    delay_ms(1000);
 
     // Turn off one segment at a time
     UINT32 lit_bit = 1;
-#define TEST_DELY__ 100
+#define TEST_DELY__ 50
     for (; lit_bit < (1u << 8); lit_bit <<= 1){
         bankB->OUT.reg |= lit_bit;
         delay_ms(TEST_DELY__);
     }
-    LOGRETURN("Displaying 1 number at a time.");
 
     // Turn on one number at a time
     lit_bit = 0u;
     for (; lit_bit < 16u; ++lit_bit){
-        display_dig(lit_bit, 1);
+        display_dig(5, lit_bit, 1);
         delay_ms(TEST_DELY__ * 3);
     }
 
     // Run semi-infinite loop to test keypad input
-    LOGRETURN("Reading keypad...");
     UINT8 row = 0x0, col = 0x0;
-    while((wait_for_key(5, &row, &col)) != TERMINATION_KEY2){
-        display_dig(row*4u+col, row);
-        delay_ms(500);
-#ifndef NLOG
-        UINT8 sub_code;
-        LOG("\tInput type was a");
-        switch (decode_input_type(key_code, &sub_code)){
-            case dig_input:
-                LOG(" digit ( ");
-                LOGNUM(sub_code);
-                LOG(" )");
-                break;
-            case op_input:
-                LOG("n operation ( ");
-                switch (sub_code){
-                    case 1: LOG("+"); break;
-                    case 2: LOG("-"); break;
-                    case 3: LOG("*"); break;
-                    case 4: LOG("/"); break;
-                    default:    break;
-                }
-                LOG(" )");
-                break;
-            case ent_input:
-                LOGRETURN("n ENTER");
-                break;
-            case clr_input:
-                LOGRETURN(" clear");
-                break;
-            default: break;
-        }
-        LOGRETURN("");
-#endif
+    while((wait_for_key(1, &row, &col)) != TERMINATION_KEY2){
+        display_dig(333, row*4u+col, row);
     }
 }
 #endif
@@ -472,14 +398,14 @@ void test_software(void){
         // store_op
     set_initial_state();
     ci_pack.state = ent_op_state;
-    BOOLEAN__ success = store_op(MUL_GLYPH);
+    volatile BOOLEAN__ success = store_op(MUL_GLYPH);
 
     set_initial_state();
     ci_pack.state = ent_num_state;
     success = store_op(MUL_GLYPH);  // Should fail
 
         // store_dig
-    set_inital_state();
+    set_initial_state();
     ci_pack.state = ent_fin_state;
     success = store_dig(0x8);
     success = store_dig(0x4);
@@ -494,11 +420,13 @@ void test_software(void){
 
         // decode_input_type
     UINT8 r = 0x0, c = 0x0;
-    input_type in = no_input;
+    volatile input_type in = no_input;
     UINT8 dummy = 0x0;
     for(; r < 0x4; ++r){
-        for(; c < 0x4; ++c){
+        for(c = 0x0; c < 0x4; ++c){
             in = decode_input_type(&dummy, r, c);
+            display_dig(100, r*4u+c, 3);
+            display_dig(2000, in, 0);
         }
     }
 
@@ -506,7 +434,7 @@ void test_software(void){
 }
 #endif
 
-void display_dig(UINT8 num, UINT8 select){
+void display_dig(UINT32 add_delay, UINT8 num, UINT8 select){
         // Active low logic
     bankB->OUT.reg &= ~0x0000007F;
         // Provide power to one specific SSD
@@ -562,10 +490,9 @@ void display_dig(UINT8 num, UINT8 select){
             bankB->OUT.reg |= 0x0E;
             break;
         default:    // Non-hexadecimal digit
-            LOGRETURN("\tInvalid digit.");
             break;
     }
-    delay_ms(5);
+    delay_ms(add_delay);
 }
 
 UINT8 wait_for_key(UINT32 add_delay, UINT8* row_dest, UINT8* col_dest){
@@ -584,35 +511,23 @@ UINT8 wait_for_key(UINT32 add_delay, UINT8* row_dest, UINT8* col_dest){
 	    // Provide power to one specific row
 	    bankA->OUT.reg |= 0x000000F0;
 	    bankA->OUT.reg &= ~(row_bit << 4u);
-        delay_ms(5);
             // Extract the four bits we're interested in from
             //   the keypad.
         *col_dest = (bankA->IN.reg >> 16u) & 0xF;
-            // Quickly display the current digit while assigning value
-            //  to *row_dest. Inline the expression so that row_dest
-            //  is dereferenced once instead of twice. This is important since
-            //  row_dest is dereferenced each iteration.
-        diaplay_dig(ci_pack.exp.operand[*row_dest = find_lsob(row_bit)], row);
+        *row_dest = find_lsob(row_bit);
+            // Multiply the delay to set an artificial, rough duty cycle
+        display_dig(add_delay*4, ci_pack.exp.operand[*row_dest + 0x4*ci_pack.num_to_display], *row_dest);
             // Check if a button was pressed
         switch(*col_dest){
             case 0xB: return TERMINATION_KEY;   // Terminate the program 
             case 0xD: return TERMINATION_KEY2;  // Terminate the test program
             case 0x0: break;                    // No buttons pressed
             default:
-                    // Count only the least significant ON bit
-                LOG("Input is: ");
-                LOGNUMRETURN(bankA->IN.reg);
-                LOG("Pressed key #");
-                // Already assigned appropriate value to row_dest
+                // Count only the least significant ON bit
+                    // Already assigned appropriate value to row_dest
                 *col_dest = find_lsob(*col_dest);
-                    LOGNUM((*row_dest-1) * 4u + *col_dest - 1u);
-                    LOG("\t(Column: ");
-                    LOGNUM(*row_dest);
-                    LOG(", Row: ");
-                    LOGNUM(*col_dest);
-                    LOGRETURN(")");
-                    delay_ms(add_delay);
-                    return CONTINUE_KEY;
+                delay_ms(add_delay);
+                return CONTINUE_KEY;
         }
 
             // Prepare for the next row. If we were on the last
@@ -648,6 +563,16 @@ void reset_info_pack(void){
 }
 
 void shutdown(void){
+#define LIGHT_DELAY__ 5
+    UINT8 counter_last = 100;
+    for(; counter_last > 0; --counter_last){
+        display_dig(LIGHT_DELAY__, 1, 3);
+        display_dig(LIGHT_DELAY__, 3, 2);
+        display_dig(LIGHT_DELAY__, 3, 1);
+        display_dig(LIGHT_DELAY__, 7, 0);
+    }
+#undef LIGHT_DELAY__
+
     set_initial_state();
     // Blink three times to indicate shutdown
     bankA->DIR.reg |= (1<14u);

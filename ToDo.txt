@@ -1,11 +1,6 @@
 Branch:
     DT:
-        * Test:
-            1) wait_for_key() with display_dig()
-            2) compute()
-            3) decode_input_type()
-            4) store_op()
-            5) store_dig()]
+        * Include a turn on feature (extra)
         * Import and test:
             1) run_calculator()
         * Clean up clutter and spaghetti code
