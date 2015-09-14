@@ -1,11 +1,7 @@
 Branch:
     DT:
-        * Include a turn on feature (extra)
-        * Import and test:
-            1) run_calculator()
+        * Figure out why divide always gives 0
         * Clean up clutter and spaghetti code
-        * Possibly replace all increment-based loops
-            with decrement-based loops
     Correia:
         * Implement and test software debouncing
         * Clean up clutter and spaghetti code
