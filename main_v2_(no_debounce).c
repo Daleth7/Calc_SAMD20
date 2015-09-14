@@ -150,8 +150,6 @@ void reset_info_pack(void);
 void shutdown(void);
     // An indicator
 void blink_rdy(UINT32 add_delay);
-    // Debounce key presses for validation.
-UINT8 debounce_keypress(void);
     /**********   End function prototypes   **********/
 
     /**********   Start global variables   **********/
@@ -176,7 +174,7 @@ int main(void){
         //  for prompt.
     while(TRUE__){
         if(start){
-            blink_rdy(250);
+            delay_ms(50);
 
             set_initial_state();
 
@@ -298,21 +296,26 @@ void run_calculator(){
         ((in_type = decode_input_type(&button, row, col_byte)) != term_input
             && button != TERMINATION_KEY)
     ){
+#define COM_DELAY__ 2
         switch(in_type){
             case del_input:
+                delay_ms(COM_DELAY__);
                 delete_last_entry();
                 continue;
             case dig_input:
+                display_dig(COM_DELAY__, button, MAX_DIGITS-1, FALSE__, FALSE__);
                 if (!store_dig(button)){
                     /*Consider doing something*/
                 }
                 break;
             case op_input:
+                delay_ms(COM_DELAY__);
                 if (!store_op(button)){
                     /*Consider doing something*/
                 }
                 break;
             case ent_input:
+                delay_ms(COM_DELAY__);
                 if(
                     cip.state != ent_fin_state &&
                     cip.exp.index >= MAX_DIGITS
@@ -401,6 +404,7 @@ void configure_ports(void){
     }
         // Turn off extra dots
     bankB->OUT.reg &= ~0x10;
+    blink_rdy(100);
 }
 
 BOOLEAN__ compute(){
@@ -663,7 +667,7 @@ void check_key(UINT8* row_dest, UINT8* col_dest){
     bankA->OUT.reg &= ~(1u << (4u + cur_row));
         // Extract the four bits we're interested in from
         //   the keypad.
-    *col_dest = debounce_keypress();
+    *col_dest = (bankA->IN.reg >> 16u) & 0xF;
     *row_dest = cur_row;
 
         // Prepare for the next row. If we were on the last
@@ -723,52 +727,6 @@ void blink_rdy(UINT32 add_delay){
         delay_ms(add_delay);
     }
     bankB->OUT.reg = 0xFF;
-}
-
-UINT8 debounce_keypress(void){
-    // Triggered the instant the first key press is detected
-    //  Returns the resulting hex number
-
-    UINT8 toreturn = (bankA->IN.reg >> 16u) & 0xF;
-
-        // Check if more than one button in a row was pressed.
-        //  If so, checking for glitches is no longer important.
-    UINT8 counter = 0x0;
-    BOOLEAN__ already_on = FALSE__;
-    for(; counter < 4; ++counter){
-        if((1 << counter) & toreturn){
-            if(already_on)  return toreturn;
-            else            already_on = TRUE__;
-        }
-    }
-
-    if(!toreturn)   return 0x0;
-#define MAX_JITTER 5
-#define RELEASE_LIM 1000
-
-    // First, read up to MAX_JITTER times to swallow spikes as button is
-    //  pressed. If no key press was detected in this time, the noise is
-    //  not from a button press.
-    for(counter = 0x0; counter < MAX_JITTER; ++counter){
-        if(!((bankA->IN.reg >> 16u) & 0xF))    return 0x0;
-    }
-
-    // Now swallow the spikes as the button is released. Do not exit
-    //  until the spikes are no longer detected after MAX_JITTER reads.
-    //  If a button press is detected after RELEASE_LIM reads, interpret
-    //  that as the user intentionally holding down the button.
-    volatile UINT32 release = 0x0;
-    for(counter = 0x0; counter < MAX_JITTER && release < RELEASE_LIM; ++counter, ++release){
-        if((bankA->IN.reg >> 16u) & 0xF)    counter = 0x0;
-            // Have the loop iteration be about 1ms long, so
-            //  control of RELEASE_LIM is easier.
-        delay_ms(1);
-    }
-
-    return toreturn;
-
-#undef MAX_JITTER
-#undef RELEASE_LIM
 }
 
     /**********   End function definitions      **********/
