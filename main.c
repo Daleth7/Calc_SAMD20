@@ -14,7 +14,6 @@
     // These are codes for special key combinations.
 #define TERMINATION_KEY     0xF
 #define TERMINATION_KEY2    0xE
-#define CONTINUE_KEY        0xD
 
     // These defines represent operation codes
 #define ADD_GLYPH           '+'
@@ -23,7 +22,6 @@
 #define DIV_GLYPH           '/'
 
     // Short macro functions for inlining common expressions
-#define EMBED32(A1, A2, B1, B2) ( A1 | (A2<<4) | (B1<<8) | (B2<<12))
 #define IS_NULL(P) (P == NULL)
     /**********   End Macro defines     **********/
 
@@ -34,18 +32,18 @@
 #define UINT32  uint32_t
 #define UINT8   uint8_t
 
-#define state_type      UINT8
-#define ent_num_state   0u
-#define ent_op_state    1u
-#define ent_fin_state   2u
+#define STATE_TYPE      UINT8
+#define ENT_NUM_STATE   0u
+#define ENT_OP_STATE    1u
+#define ENT_FIN_STATE   2u
 
-#define input_type      UINT8
-#define dig_input       0u
-#define op_input        1u
-#define ent_input       2u
-#define no_input        3u
-#define del_input       4u
-#define term_input      16u
+#define INPUT_TYPE      UINT8
+#define DIG_INPUT       0u
+#define OP_INPUT        1u
+#define ENT_INPUT       2u
+#define NO_INPUT        3u
+#define DEL_INPUT       4u
+#define TERM_INPUT      16u
 
 #define BOOLEAN__     UINT8
 #define TRUE__        1
@@ -70,7 +68,7 @@ struct calculator_information_packet{
         // Let a negative number indicate that the storage is empty
     expression_data exp;
     UINT8 magnitude, num_to_display;
-    state_type state;
+    STATE_TYPE state;
 };
 
     /**********   End type aliasing     **********/
@@ -90,7 +88,7 @@ void run_calculator(void);
 
 void delete_last_entry(void);
 
-    // Find last significant ON bit
+    // Find least significant ON bit
 UINT32 find_lsob(UINT32);
 
     // Configure pins for IO as well as enable
@@ -102,7 +100,7 @@ void configure_ports(void);
     //  use comptue to store the resulting value as the first operand
     //  in the information packet. This might also allow extension into
     //  chained expressions.
-    // Return whether or not an overload has occurred.    
+    // Return whether or not an overload has occurred.
 BOOLEAN__ compute(void);
 
     // Store digit attempts to push digit to lsd of current number
@@ -110,6 +108,7 @@ BOOLEAN__ compute(void);
     //  of the calculator.
     //  This function returns whether or not the storing of the
     //  digit was successful.
+    //  Store operation is similar in storing the operation code.
 BOOLEAN__ store_dig(UINT8 new_dig);
 BOOLEAN__ store_op(UINT8 new_op);
 
@@ -120,22 +119,22 @@ BOOLEAN__ store_op(UINT8 new_op);
     //        - Subtraction       --> SUB_GLYPH
     //        - Multiplication    --> MUL_GLYPH
     //        - Division          --> DIV_GLYPH
-    //    For Enter and Clear inputs, the code is 0.
-input_type decode_input_type(UINT8* i_code, UINT8 row, UINT8 col);
+    //    For Enter and Delete inputs, the code is 0.
+INPUT_TYPE decode_input_type(UINT8* i_code, UINT8 row, UINT8 col);
 
         /**********   Start IO functions   **********/
-    // Display number to the seven segment displays
+    // Display single to one of the seven segment displays
 void display_dig(
     UINT32 add_delay, UINT8 dig_to_display, UINT8 select,
     BOOLEAN__ show_dot, BOOLEAN__ show_sign
 );
 
-    // Wait for keypad input and return the key that was pressed.
-    //  0 - 15 denotes key on keypad from bottom to top then left to right
+    // Check for any input (key press) and provide debouncing functionality.
+    //  0 - 15 denotes key on keypad from right to left then bottom to top
     //  TERMINATION_KEY2 denotes combo key to terminate program
     //  TERMINATION_KEY denotes combo key to terminate test program
-    //    13 denotes the clear key
-    //    5 denotes the enter key
+    //    8 denotes the delete key
+    //    12 denotes the enter key
 void check_key(UINT8* row_dest, UINT8* col_dest);
         /**********    End IO functions    **********/
 
@@ -188,11 +187,11 @@ int main(void){
             test_hardware();
         #endif
 
-        run_calculator();
+            run_calculator();
 
             shutdown();
         }
-        bankA->OUT.reg = ~0x10;
+        bankA->OUT.reg &= ~0x10;
         start = ((bankA->IN.reg >> 16u) & 0xF) == 0xF;
     }
 
@@ -218,20 +217,22 @@ void test_hardware(void){
     // Turn on one number at a time
     lit_bit = 0u;
     for (; lit_bit < 16u; ++lit_bit){
-        display_dig(5, lit_bit, 1, FALSE__, FALSE__);
+        display_dig(5000, lit_bit, 1, FALSE__, FALSE__);
         delay_ms(TEST_DELY__ * 3);
     }
     // Run semi-infinite loop to test keypad input
     UINT8 row = 0x0, col_byte = 0x0, button = 0xFF;
     while(
         check_key(&row, &col_byte),
-        (decode_input_type(&button, row, col_byte) != term_input
+        (decode_input_type(&button, row, col_byte) != TERM_INPUT
             && button != TERMINATION_KEY2)
     ){
         if(col_byte)
-            display_dig(333, row*4u+find_lsob(col_byte), row, FALSE__, FALSE__);
+            display_dig(333333, row*4u+find_lsob(col_byte), row, FALSE__, FALSE__);
         display_dig(0, NULL_DIG, row, FALSE__, FALSE__);
     }
+
+    blink_rdy(250);
 }
 #endif
 
@@ -249,16 +250,16 @@ void test_software(void){
 
         // store_op
     set_initial_state();
-    cip.state = ent_op_state;
+    cip.state = ENT_OP_STATE;
     volatile BOOLEAN__ success = store_op(MUL_GLYPH);
 
     set_initial_state();
-    cip.state = ent_num_state;
+    cip.state = ENT_NUM_STATE;
     success = store_op(MUL_GLYPH);  // Should fail
 
         // store_dig
     set_initial_state();
-    cip.state = ent_fin_state;
+    cip.state = ENT_FIN_STATE;
     success = store_dig(0x8);
     success = store_dig(0x4);
     success = store_dig(0x2);
@@ -272,17 +273,19 @@ void test_software(void){
 
         // decode_input_type
     UINT8 r = 0x0, c = 0x0;
-    volatile input_type in = no_input;
+    volatile INPUT_TYPE in = NO_INPUT;
     UINT8 dummy = 0x0;
     for(; r < 0x4; ++r){
         for(c = 0x0; c < 0x4; ++c){
             in = decode_input_type(&dummy, r, c);
-            display_dig(100, r*4u+c, 3, FALSE__, FALSE__);
-            display_dig(2000, in, 0, FALSE__, FALSE__);
+            display_dig(100000, r*4u+c, 3, FALSE__, FALSE__);
+            display_dig(2000000, in, 0, FALSE__, FALSE__);
         }
     }
 
     set_initial_state();
+
+    blink_rdy(250);
 }
 #endif
 
@@ -291,42 +294,42 @@ void run_calculator(){
 
     UINT8 button = 0x0;
     UINT8 row = 0xF0, col_byte = 0xF0;
-    input_type in_type = no_input;
+    INPUT_TYPE in_type = NO_INPUT;
         // Start processing key presses
     while(
         check_key(&row, &col_byte),
-        ((in_type = decode_input_type(&button, row, col_byte)) != term_input
+        ((in_type = decode_input_type(&button, row, col_byte)) != TERM_INPUT
             && button != TERMINATION_KEY)
     ){
         switch(in_type){
-            case del_input:
+            case DEL_INPUT:
                 delete_last_entry();
                 continue;
-            case dig_input:
+            case DIG_INPUT:
                 if (!store_dig(button)){
                     /*Consider doing something*/
                 }
                 break;
-            case op_input:
+            case OP_INPUT:
                 if (!store_op(button)){
                     /*Consider doing something*/
                 }
                 break;
-            case ent_input:
+            case ENT_INPUT:
                 if(
-                    cip.state != ent_fin_state &&
+                    cip.state != ENT_FIN_STATE &&
                     cip.exp.index >= MAX_DIGITS
                 ){
                     compute();
-                    cip.state = ent_fin_state;
+                    cip.state = ENT_FIN_STATE;
                     cip.num_to_display = 0u;
                 }
                 break;
-            case no_input:  break;
-            default:    break;
+            case NO_INPUT:  break;
+            default:        break;
         }
         display_dig(
-            3,
+            200,
             cip.exp.operand[cip.num_to_display*4u+MAX_DIGITS-1u-row],
             row,
             row == MAX_DIGITS-1-((cip.exp.index-1u)%MAX_DIGITS)+MAX_PRECISION,
@@ -345,11 +348,11 @@ void delete_last_entry(void){
             cip.magnitude = 0x0;
             return;
         case 0x4:
-            if(cip.state == ent_op_state){
+            if(cip.state == ENT_OP_STATE){
                 cip.exp.operand[MAX_DIGITS - 1] = NULL_DIG;
-                cip.state = ent_num_state;
+                cip.state = ENT_NUM_STATE;
             } else {    // Operator already entered but digit not
-                cip.state = ent_op_state;
+                cip.state = ENT_OP_STATE;
             }
             for(
                 counter = MAX_DIGITS, cip.magnitude = MAX_DIGITS;
@@ -362,7 +365,7 @@ void delete_last_entry(void){
         default:
             --cip.exp.index;
             cip.exp.operand[cip.exp.index] = NULL_DIG;
-            cip.state = ent_num_state;
+            cip.state = ENT_NUM_STATE;
                 // Should never be 0 before decrement
             --cip.magnitude;
             break;
@@ -429,7 +432,7 @@ BOOLEAN__ compute(){
         case ADD_GLYPH: op1 += op2;         break;
         case SUB_GLYPH: op1 -= op2;         break;
         case MUL_GLYPH: op1 *= op2;         break;
-        case DIV_GLYPH: op1 = op2 / op1;    break;
+        case DIV_GLYPH: op1 = op1 / op2;    break;
         default:                            return FALSE__;
     }
 
@@ -437,6 +440,7 @@ BOOLEAN__ compute(){
         cip.exp.is_neg |= 0x1;
         op2 = (op1 *= -1);
     } else {
+        cip.exp.is_neg = 0x0;
         op2 = op1;
     }
         // Reset some values and store the result in operand 1's slot
@@ -461,12 +465,12 @@ BOOLEAN__ compute(){
 
 BOOLEAN__ store_dig(UINT8 new_dig){
     switch(cip.state){
-        case ent_fin_state:
+        case ENT_FIN_STATE:
             // Calculation was finished, so reset all values
             //  and store new digit. Also go to the entering
             //  number state.
             reset_info_pack();
-        case ent_num_state:
+        case ENT_NUM_STATE:
             // Program is ready to accept a new digit.
             if (cip.magnitude == MAX_MAGNITUDE){
                 // There were already MAX_MAGNITUDE digits stored
@@ -484,10 +488,10 @@ BOOLEAN__ store_dig(UINT8 new_dig){
                 cip.num_to_display = 0x1;
             if(cip.magnitude == MAX_MAGNITUDE){
                 cip.magnitude = 0u;
-                cip.state = ent_op_state;
+                cip.state = ENT_OP_STATE;
             }
             return TRUE__;
-        case ent_op_state:
+        case ENT_OP_STATE:
             // Program was expecting an operator.
             //  Guarantee that expression is not affected.
             return FALSE__;
@@ -498,18 +502,20 @@ BOOLEAN__ store_dig(UINT8 new_dig){
 
 BOOLEAN__ store_op(UINT8 new_op){
     switch (cip.state){
-        case ent_op_state:
+        case ENT_OP_STATE:
             cip.exp.op_code = new_op;
-            cip.state = ent_num_state;
+            cip.state = ENT_NUM_STATE;
             cip.num_to_display = 0x1;
             return TRUE__;
-        case ent_num_state:
+        case ENT_NUM_STATE:
             if (cip.exp.index >= MAX_DIGITS){
                 // Either the current operand has no digits
                 //  or the program is already on the second
                 //  operand.
                 return FALSE__;
             }
+        case ENT_FIN_STATE: // Allow expression chaining
+            cip.state = ENT_NUM_STATE;
             cip.exp.op_code = new_op;
             cip.exp.index = MAX_DIGITS;
             cip.magnitude = 0u;
@@ -520,9 +526,9 @@ BOOLEAN__ store_op(UINT8 new_op){
     }
 }
 
-input_type decode_input_type(UINT8* i_code, UINT8 row, UINT8 col){
+INPUT_TYPE decode_input_type(UINT8* i_code, UINT8 row, UINT8 col){
     if (IS_NULL(i_code)){
-        return no_input;
+        return NO_INPUT;
     }
 
         // Check if a button was pressed
@@ -530,47 +536,46 @@ input_type decode_input_type(UINT8* i_code, UINT8 row, UINT8 col){
         case 0xB:
             if(row != 3)    break;
             *i_code = TERMINATION_KEY;      // Terminate the program 
-            return term_input;
+            return TERM_INPUT;
         case 0xD:
             if(row != 3)    break;
             *i_code = TERMINATION_KEY2;     // Terminate the test program
-            return term_input;
+            return TERM_INPUT;
         case 0x0:
-            return no_input;
+            return NO_INPUT;
         default:    break;
     }
     col = find_lsob(col);
 
     // Active high operation
-
     switch (row*4u+col){
     // Operations
         case 0x0:
             *i_code = DIV_GLYPH;
-            return op_input;
+            return OP_INPUT;
         case 0x4:
             *i_code = MUL_GLYPH;
-            return op_input;
+            return OP_INPUT;
         case 0x3:
             *i_code = SUB_GLYPH;
-            return op_input;
+            return OP_INPUT;
         case 0x1:
             *i_code = ADD_GLYPH;
-            return op_input;
+            return OP_INPUT;
     // Enter and clear
         case 0xC:
             *i_code = 0;
-            return ent_input;
+            return ENT_INPUT;
         case 0x8:
             *i_code = 0;
-            return del_input;
+            return DEL_INPUT;
     // Digits
         case 0x2:
             *i_code = 0;
-            return dig_input;
+            return DIG_INPUT;
         default:
            *i_code = (0x3 - row) * 0x3 + (0x4 - col);
-            return dig_input;
+            return DIG_INPUT;
     }
 }
 
@@ -651,12 +656,11 @@ void display_dig(
     else            bankB->OUT.reg |=  0x00000080;
     if(show_sign)   bankB->OUT.reg &= ~0x00000200;
     else            bankB->OUT.reg |=  0x00000200;
-    delay_ms(add_delay);
+    delay_us(add_delay);
 }
 
 void check_key(UINT8* row_dest, UINT8* col_dest){
     if(IS_NULL(row_dest) || IS_NULL(col_dest))  return;
-
     static UINT8 cur_row = 0u;
     // Provide power to one specific row
     bankA->OUT.reg |= 0x000000F0;
@@ -691,12 +695,12 @@ void reset_info_pack(void){
         cip.exp.operand[counter-0x1] = NULL_DIG;
     cip.exp.index = cip.exp.op_code = cip.exp.is_neg = 0u;
     cip.magnitude = cip.num_to_display = 0u;
-    cip.state = ent_num_state;
+    cip.state = ENT_NUM_STATE;
 }
 
 void shutdown(void){
-#define LIGHT_DELAY__ 5
-    UINT8 counter_last = 100;
+#define LIGHT_DELAY__ 5000
+    UINT8 counter_last = 7;
     for(; counter_last > 0; --counter_last){
         display_dig(LIGHT_DELAY__, 1, 3, FALSE__, FALSE__);
         display_dig(LIGHT_DELAY__, 3, 2, FALSE__, FALSE__);
@@ -733,18 +737,17 @@ UINT8 debounce_keypress(void){
 
         // Check if more than one button in a row was pressed.
         //  If so, checking for glitches is no longer important.
-    UINT8 counter = 0x0;
+    UINT32 counter = 0x0;
     BOOLEAN__ already_on = FALSE__;
     for(; counter < 4; ++counter){
-        if((1 << counter) & toreturn){
-            if(already_on)  return toreturn;
-            else            already_on = TRUE__;
-        }
+        if(already_on & (toreturn >> counter))  return toreturn;
+        else    already_on = (toreturn >> counter) & 0x1;
     }
 
     if(!toreturn)   return 0x0;
-#define MAX_JITTER 5
-#define RELEASE_LIM 1000
+#define MAX_JITTER  5
+#define MAX_JITTER2 1000
+#define RELEASE_LIM 7500
 
     // First, read up to MAX_JITTER times to swallow spikes as button is
     //  pressed. If no key press was detected in this time, the noise is
@@ -755,14 +758,15 @@ UINT8 debounce_keypress(void){
 
     // Now swallow the spikes as the button is released. Do not exit
     //  until the spikes are no longer detected after MAX_JITTER reads.
-    //  If a button press is detected after RELEASE_LIM reads, interpret
-    //  that as the user intentionally holding down the button.
+    //  If the user is holding down the button, release manually based
+    //  on RELEASE_LIM.
     volatile UINT32 release = 0x0;
-    for(counter = 0x0; counter < MAX_JITTER && release < RELEASE_LIM; ++counter, ++release){
+    for(
+        counter = 0x0;
+        counter < MAX_JITTER2 && release < RELEASE_LIM;
+        ++counter, ++release
+    ){
         if((bankA->IN.reg >> 16u) & 0xF)    counter = 0x0;
-            // Have the loop iteration be about 1ms long, so
-            //  control of RELEASE_LIM is easier.
-        delay_ms(1);
     }
 
     return toreturn;
@@ -771,4 +775,4 @@ UINT8 debounce_keypress(void){
 #undef RELEASE_LIM
 }
 
-    /**********   End function definitions      **********/
+/**********   End function definitions      **********/

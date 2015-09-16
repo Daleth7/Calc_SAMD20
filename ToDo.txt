@@ -1,7 +1,3 @@
 Branch:
     DT:
-        * Figure out why divide always gives 0
-        * Clean up clutter and spaghetti code
     Correia:
-        * Implement and test software debouncing
-        * Clean up clutter and spaghetti code
